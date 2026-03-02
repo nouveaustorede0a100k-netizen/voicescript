@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import Link from 'next/link'
 import { Mic } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
@@ -38,8 +39,10 @@ export default function LoginPage() {
             </span>
           </div>
 
-          {/* Formulaire */}
-          <SignInForm />
+          {/* Formulaire (Suspense requis pour useSearchParams) */}
+          <Suspense>
+            <SignInForm />
+          </Suspense>
 
           {/* Lien inscription */}
           <p className="text-center text-sm text-muted-foreground">

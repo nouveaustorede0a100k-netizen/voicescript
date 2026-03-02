@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { SettingsContent } from '@/components/settings/SettingsContent'
@@ -19,5 +20,9 @@ export default async function SettingsPage() {
 
   if (!profile) redirect('/login')
 
-  return <SettingsContent profile={profile as Profile} />
+  return (
+    <Suspense>
+      <SettingsContent profile={profile as Profile} />
+    </Suspense>
+  )
 }
