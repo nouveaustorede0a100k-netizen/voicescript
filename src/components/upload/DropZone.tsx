@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, useEffect } from 'react'
 import {
   Upload,
   CheckCircle,
@@ -8,6 +8,7 @@ import {
   X,
   RefreshCw,
   FileAudio,
+  Video,
 } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -57,7 +58,48 @@ export function DropZone({
 }: DropZoneProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [clientError, setClientError] = useState<string | null>(null)
+  const [thumbnail, setThumbnail] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Génération de miniature pour les vidéos
+  useEffect(() => {
+    if (!selectedFile) {
+      setThumbnail(null)
+      return
+    }
+
+    if (!selectedFile.type.startsWith('video/')) {
+      setThumbnail(null)
+      return
+    }
+
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    const objectUrl = URL.createObjectURL(selectedFile)
+    video.src = objectUrl
+
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1, video.duration / 2)
+    }
+
+    video.onseeked = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      canvas.getContext('2d')?.drawImage(video, 0, 0)
+      setThumbnail(canvas.toDataURL('image/jpeg'))
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    video.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      setThumbnail(null)
+    }
+
+    return () => {
+      URL.revokeObjectURL(objectUrl)
+    }
+  }, [selectedFile])
 
   const validateFile = useCallback(
     (file: File): string | null => {
@@ -117,14 +159,25 @@ export function DropZone({
     [handleFile]
   )
 
+  const isVideo = selectedFile?.type.startsWith('video/')
+  const filePreview = thumbnail ? (
+    <img src={thumbnail} alt="Aperçu" className="h-12 w-16 shrink-0 rounded-lg object-cover" />
+  ) : (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-indigo-100">
+      {isVideo ? (
+        <Video className="h-6 w-6 text-indigo-600" />
+      ) : (
+        <FileAudio className="h-6 w-6 text-indigo-600" />
+      )}
+    </div>
+  )
+
   // --- État : Uploading ---
   if (uploadStatus === 'uploading' && selectedFile) {
     return (
       <div className="rounded-xl border border-border bg-white p-8">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-indigo-100">
-            <FileAudio className="h-6 w-6 text-indigo-600" />
-          </div>
+          {filePreview}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-vs-text">
               {selectedFile.name}
@@ -135,7 +188,7 @@ export function DropZone({
           </div>
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="sm"
             onClick={onCancel}
             aria-label="Annuler l'upload"
           >
@@ -159,7 +212,11 @@ export function DropZone({
   if (uploadStatus === 'success' && selectedFile) {
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-8 text-center">
-        <CheckCircle className="mx-auto h-12 w-12 text-emerald-500" />
+        {thumbnail ? (
+          <img src={thumbnail} alt="Aperçu" className="mx-auto h-20 w-32 rounded-lg object-cover" />
+        ) : (
+          <CheckCircle className="mx-auto h-12 w-12 text-emerald-500" />
+        )}
         <p className="mt-3 text-sm font-medium text-emerald-800">
           {selectedFile.name}
         </p>

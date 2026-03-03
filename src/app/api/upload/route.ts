@@ -27,22 +27,26 @@ function formatMB(bytes: number): string {
 
 export async function POST(request: Request) {
   try {
+    console.log('[Upload] Début du traitement')
+
     const supabase = await createServerSupabaseClient()
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser()
+    console.log('[Upload] Auth:', user?.id, 'Error:', authError?.message)
 
     if (authError || !user) {
       return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
     }
 
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('plan, minutes_used, minutes_limit')
       .eq('id', user.id)
       .single()
 
+    console.log('[Upload] Profil:', profile?.plan, 'Error:', profileError?.message)
     const plan = profile?.plan || 'free'
 
     const formData = await request.formData()
@@ -51,6 +55,8 @@ export async function POST(request: Request) {
     const language = (formData.get('language') as string) || 'fr'
     const accent = (formData.get('accent') as string) || 'fr-standard'
     const projectId = (formData.get('project_id') as string) || null
+
+    console.log('[Upload] Fichier:', file?.name, 'Taille:', file?.size, 'Type:', file?.type)
 
     if (!file) {
       return NextResponse.json({ error: 'Aucun fichier fourni' }, { status: 422 })
@@ -78,10 +84,11 @@ export async function POST(request: Request) {
 
     const estimatedMinutes = Math.max(Math.ceil(file.size / (1024 * 1024) / 2), 1)
 
-    const { data: hasQuota } = await supabase.rpc('check_quota', {
+    const { data: hasQuota, error: quotaError } = await supabase.rpc('check_quota', {
       p_user_id: user.id,
       p_minutes: estimatedMinutes,
     })
+    console.log('[Upload] Quota check:', hasQuota, 'Error:', quotaError?.message)
 
     if (hasQuota === false) {
       const remaining = Math.max(
@@ -96,8 +103,17 @@ export async function POST(request: Request) {
       )
     }
 
+    console.log('[Upload] R2 config:', {
+      accountId: process.env.R2_ACCOUNT_ID ? 'SET' : 'MISSING',
+      accessKey: process.env.R2_ACCESS_KEY_ID ? 'SET' : 'MISSING',
+      secretKey: process.env.R2_SECRET_ACCESS_KEY ? 'SET' : 'MISSING',
+      bucket: process.env.R2_BUCKET_NAME || 'MISSING',
+    })
+
+    console.log('[Upload] Début upload R2...')
     const buffer = Buffer.from(await file.arrayBuffer())
     const r2Result = await uploadFile(buffer, user.id, file.name, file.type)
+    console.log('[Upload] R2 OK:', r2Result.key)
 
     const validAccents = [
       'fr-standard',
@@ -127,9 +143,11 @@ export async function POST(request: Request) {
       .select('id')
       .single()
 
+    console.log('[Upload] DB insert:', transcription?.id, 'Error:', dbError?.message)
+
     if (dbError || !transcription) {
       return NextResponse.json(
-        { error: "Erreur lors de la création de la transcription" },
+        { error: `Erreur base de données : ${dbError?.message ?? 'Insertion échouée'}` },
         { status: 500 }
       )
     }
@@ -147,15 +165,18 @@ export async function POST(request: Request) {
       console.error('[Upload] Erreur lancement pipeline:', err)
     })
 
+    console.log('[Upload] Succès, transcription_id:', transcription.id)
     return NextResponse.json({
       transcription_id: transcription.id,
       status: 'pending',
       file_url: r2Result.url,
       file_size: r2Result.size,
     })
-  } catch {
+  } catch (error) {
+    console.error('[Upload] ERREUR COMPLÈTE:', error)
+    const message = error instanceof Error ? error.message : 'Erreur inconnue'
     return NextResponse.json(
-      { error: "Erreur lors de l'upload" },
+      { error: `Erreur lors de l'upload : ${message}` },
       { status: 500 }
     )
   }

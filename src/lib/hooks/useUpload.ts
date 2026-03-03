@@ -56,20 +56,28 @@ export function useUpload(): UseUploadReturn {
       })
 
       xhr.addEventListener('load', () => {
-        try {
-          const data = JSON.parse(xhr.responseText)
-
-          if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText)
             setStatus('success')
             setProgress(100)
             setResult({ transcription_id: data.transcription_id })
-          } else {
+          } catch {
             setStatus('error')
-            setError(data.error || 'Une erreur est survenue')
+            setError('Réponse invalide du serveur (JSON attendu)')
           }
-        } catch {
+        } else {
+          let errorMsg = `Erreur serveur (${xhr.status})`
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (data.error) errorMsg = data.error
+          } catch {
+            if (xhr.responseText) {
+              errorMsg = `Erreur serveur (${xhr.status}) : réponse non-JSON`
+            }
+          }
           setStatus('error')
-          setError('Réponse invalide du serveur')
+          setError(errorMsg)
         }
       })
 
