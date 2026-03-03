@@ -4,6 +4,13 @@ import { useCallback, useRef, useState } from 'react'
 
 type UploadStatus = 'idle' | 'uploading' | 'success' | 'error'
 
+interface UploadOptions {
+  title: string
+  language: string
+  accent: string
+  project_id?: string | null
+}
+
 interface UploadResult {
   transcription_id: string
 }
@@ -13,10 +20,20 @@ interface UseUploadReturn {
   progress: number
   error: string | null
   result: UploadResult | null
-  upload: (file: File, options: { title: string; language: string; accent: string; project_id?: string | null }) => void
+  upload: (file: File, options: UploadOptions) => void
   cancel: () => void
   retry: () => void
   reset: () => void
+}
+
+async function jsonOrThrow(res: Response): Promise<Record<string, unknown>> {
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(
+      (data.error as string) || `Erreur serveur (${res.status})`
+    )
+  }
+  return data
 }
 
 export function useUpload(): UseUploadReturn {
@@ -26,80 +43,122 @@ export function useUpload(): UseUploadReturn {
   const [result, setResult] = useState<UploadResult | null>(null)
 
   const xhrRef = useRef<XMLHttpRequest | null>(null)
-  const lastArgsRef = useRef<{
-    file: File
-    options: { title: string; language: string; accent: string; project_id?: string | null }
-  } | null>(null)
+  const abortedRef = useRef(false)
+  const lastArgsRef = useRef<{ file: File; options: UploadOptions } | null>(null)
 
-  const upload = useCallback(
-    (file: File, options: { title: string; language: string; accent: string; project_id?: string | null }) => {
-      lastArgsRef.current = { file, options }
-      setStatus('uploading')
-      setProgress(0)
-      setError(null)
-      setResult(null)
+  const upload = useCallback((file: File, options: UploadOptions) => {
+    lastArgsRef.current = { file, options }
+    abortedRef.current = false
+    setStatus('uploading')
+    setProgress(0)
+    setError(null)
+    setResult(null)
 
-      const xhr = new XMLHttpRequest()
-      xhrRef.current = xhr
+    ;(async () => {
+      try {
+        // Étape 1 — Obtenir l'URL signée
+        const presignData = await jsonOrThrow(
+          await fetch('/api/upload/presign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: file.name,
+              fileSize: file.size,
+              fileType: file.type,
+            }),
+          })
+        )
 
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('title', options.title)
-      formData.append('language', options.language)
-      formData.append('accent', options.accent)
-      if (options.project_id) formData.append('project_id', options.project_id)
+        if (abortedRef.current) return
 
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          setProgress(Math.round((e.loaded / e.total) * 100))
-        }
-      })
+        const uploadUrl = presignData.uploadUrl as string
+        const key = presignData.key as string
 
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const data = JSON.parse(xhr.responseText)
-            setStatus('success')
-            setProgress(100)
-            setResult({ transcription_id: data.transcription_id })
-          } catch {
-            setStatus('error')
-            setError('Réponse invalide du serveur (JSON attendu)')
-          }
-        } else {
-          let errorMsg = `Erreur serveur (${xhr.status})`
-          try {
-            const data = JSON.parse(xhr.responseText)
-            if (data.error) errorMsg = data.error
-          } catch {
-            if (xhr.responseText) {
-              errorMsg = `Erreur serveur (${xhr.status}) : réponse non-JSON`
+        // Étape 2 — Upload direct vers R2 avec progression
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          xhrRef.current = xhr
+
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              setProgress(Math.round((e.loaded / e.total) * 95))
             }
-          }
-          setStatus('error')
-          setError(errorMsg)
+          })
+
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve()
+            } else {
+              reject(
+                new Error(
+                  `Échec de l'envoi du fichier vers le stockage (${xhr.status})`
+                )
+              )
+            }
+          })
+
+          xhr.addEventListener('error', () => {
+            reject(new Error('Erreur réseau lors de l\'envoi du fichier'))
+          })
+
+          xhr.addEventListener('abort', () => {
+            abortedRef.current = true
+            reject(new Error('__aborted__'))
+          })
+
+          xhr.open('PUT', uploadUrl)
+          xhr.setRequestHeader('Content-Type', file.type)
+          xhr.send(file)
+        })
+
+        if (abortedRef.current) return
+
+        // Étape 3 — Finaliser (créer la transcription en DB)
+        setProgress(97)
+        const completeData = await jsonOrThrow(
+          await fetch('/api/upload/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              key,
+              fileName: file.name,
+              fileSize: file.size,
+              fileType: file.type,
+              title: options.title,
+              language: options.language,
+              accent: options.accent,
+              projectId: options.project_id ?? null,
+            }),
+          })
+        )
+
+        setStatus('success')
+        setProgress(100)
+        setResult({
+          transcription_id: completeData.transcription_id as string,
+        })
+      } catch (err) {
+        if (abortedRef.current || (err as Error).message === '__aborted__') {
+          setStatus('idle')
+          setProgress(0)
+          return
         }
-      })
-
-      xhr.addEventListener('error', () => {
         setStatus('error')
-        setError('Erreur de connexion. Vérifiez votre réseau.')
-      })
-
-      xhr.addEventListener('abort', () => {
-        setStatus('idle')
-        setProgress(0)
-      })
-
-      xhr.open('POST', '/api/upload')
-      xhr.send(formData)
-    },
-    []
-  )
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Une erreur est survenue lors de l\'upload'
+        )
+      }
+    })()
+  }, [])
 
   const cancel = useCallback(() => {
+    abortedRef.current = true
     xhrRef.current?.abort()
     xhrRef.current = null
+    setStatus('idle')
+    setProgress(0)
   }, [])
 
   const retry = useCallback(() => {
@@ -110,8 +169,6 @@ export function useUpload(): UseUploadReturn {
 
   const reset = useCallback(() => {
     cancel()
-    setStatus('idle')
-    setProgress(0)
     setError(null)
     setResult(null)
     lastArgsRef.current = null
