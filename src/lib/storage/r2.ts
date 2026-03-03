@@ -78,17 +78,17 @@ export async function getPresignedUploadUrl(
 ): Promise<{ uploadUrl: string; key: string }> {
   const key = generateFileKey(userId, fileName)
 
+  // Ne pas inclure Metadata dans le presigned PUT :
+  // le navigateur ne peut pas envoyer les headers x-amz-meta-*
+  // ce qui causerait un SignatureDoesNotMatch.
   const command = new PutObjectCommand({
     Bucket: BUCKET,
     Key: key,
     ContentType: contentType,
-    Metadata: {
-      'user-id': userId,
-      'original-name': fileName,
-    },
   })
 
   const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn })
+  console.log('[R2] Presigned URL generated for key:', key)
   return { uploadUrl, key }
 }
 

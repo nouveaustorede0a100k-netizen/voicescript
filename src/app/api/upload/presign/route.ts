@@ -78,6 +78,14 @@ export async function POST(request: Request) {
       )
     }
 
+    console.log('[Presign] Generating URL for:', { fileName, fileSize, fileType, userId: user.id })
+    console.log('[Presign] R2 config:', {
+      accountId: process.env.R2_ACCOUNT_ID ? 'SET' : 'MISSING',
+      accessKey: process.env.R2_ACCESS_KEY_ID ? 'SET' : 'MISSING',
+      secretKey: process.env.R2_SECRET_ACCESS_KEY ? 'SET' : 'MISSING',
+      bucket: process.env.R2_BUCKET_NAME || 'MISSING',
+    })
+
     const { uploadUrl, key } = await getPresignedUploadUrl(
       user.id,
       fileName,
@@ -85,6 +93,7 @@ export async function POST(request: Request) {
       600
     )
 
+    console.log('[Presign] OK, key:', key)
     return NextResponse.json({ uploadUrl, key })
   } catch (error) {
     console.error('[Presign] Erreur:', error)
