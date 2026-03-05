@@ -16,6 +16,8 @@ const r2Client = new S3Client({
     accessKeyId: process.env.R2_ACCESS_KEY_ID!,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
   },
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+  responseChecksumValidation: 'WHEN_REQUIRED',
 })
 
 const BUCKET = process.env.R2_BUCKET_NAME!
@@ -87,7 +89,10 @@ export async function getPresignedUploadUrl(
     ContentType: contentType,
   })
 
-  const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn })
+  const uploadUrl = await getSignedUrl(r2Client, command, {
+    expiresIn,
+    unhoistableHeaders: new Set(['content-type']),
+  })
   console.log('[R2] Presigned URL generated for key:', key)
   return { uploadUrl, key }
 }
