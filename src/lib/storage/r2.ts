@@ -91,7 +91,7 @@ export async function getPresignedUploadUrl(
 
   const uploadUrl = await getSignedUrl(r2Client, command, {
     expiresIn,
-    unhoistableHeaders: new Set(['content-type']),
+    signableHeaders: new Set(['content-type']),
   })
   console.log('[R2] Presigned URL generated for key:', key)
   return { uploadUrl, key }
