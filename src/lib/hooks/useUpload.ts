@@ -42,7 +42,7 @@ export function useUpload(): UseUploadReturn {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<UploadResult | null>(null)
 
-  const xhrRef = useRef<XMLHttpRequest | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
   const abortedRef = useRef(false)
   const lastArgsRef = useRef<{ file: File; options: UploadOptions } | null>(null)
 
@@ -77,46 +77,22 @@ export function useUpload(): UseUploadReturn {
         console.log('[Upload] Presign OK:', { uploadUrl: uploadUrl.substring(0, 80) + '...', key })
         console.log('[Upload] File:', file.name, file.size, file.type)
 
-        // Étape 2 — Upload direct vers R2 avec progression
-        await new Promise<void>((resolve, reject) => {
-          const xhr = new XMLHttpRequest()
-          xhrRef.current = xhr
+        // Étape 2 — Upload direct vers R2 (fetch, aucun header)
+        const controller = new AbortController()
+        abortControllerRef.current = controller
 
-          xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-              setProgress(Math.round((e.loaded / e.total) * 95))
-            }
-          })
-
-          xhr.addEventListener('load', () => {
-            console.log('[Upload] XHR load:', xhr.status, xhr.statusText)
-            console.log('[Upload] XHR response:', xhr.responseText.substring(0, 200))
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve()
-            } else {
-              reject(
-                new Error(
-                  `Upload R2 échoué (${xhr.status} ${xhr.statusText}): ${xhr.responseText.substring(0, 150)}`
-                )
-              )
-            }
-          })
-
-          xhr.addEventListener('error', () => {
-            console.error('[Upload] XHR error event, readyState:', xhr.readyState, 'status:', xhr.status)
-            reject(new Error(`Erreur réseau lors de l'envoi (readyState: ${xhr.readyState})`))
-          })
-
-          xhr.addEventListener('abort', () => {
-            console.log('[Upload] XHR aborted')
-            abortedRef.current = true
-            reject(new Error('__aborted__'))
-          })
-
-          xhr.open('PUT', uploadUrl)
-          xhr.setRequestHeader('Content-Type', file.type)
-          xhr.send(file)
+        const r2Response = await fetch(uploadUrl, {
+          method: 'PUT',
+          body: file,
+          signal: controller.signal,
         })
+
+        if (!r2Response.ok) {
+          const errorText = await r2Response.text()
+          console.error('[Upload] R2 error:', r2Response.status, errorText)
+          throw new Error(`Upload échoué: ${r2Response.status}`)
+        }
+        console.log('[Upload] R2 OK:', r2Response.status)
 
         if (abortedRef.current) return
 
@@ -145,7 +121,7 @@ export function useUpload(): UseUploadReturn {
           transcription_id: completeData.transcription_id as string,
         })
       } catch (err) {
-        if (abortedRef.current || (err as Error).message === '__aborted__') {
+        if (abortedRef.current || (err as Error).message === '__aborted__' || (err as Error).name === 'AbortError') {
           setStatus('idle')
           setProgress(0)
           return
@@ -160,8 +136,8 @@ export function useUpload(): UseUploadReturn {
 
   const cancel = useCallback(() => {
     abortedRef.current = true
-    xhrRef.current?.abort()
-    xhrRef.current = null
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
     setStatus('idle')
     setProgress(0)
   }, [])
